@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -15,7 +16,27 @@ var (
 	ErrInvalidInput      = errors.New("invalid input")
 	ErrInsufficientStock = errors.New("insufficient stock")
 	ErrItemHasStock      = errors.New("item still has stock")
+	ErrInUse             = errors.New("resource is in use")
+	ErrDuplicate         = errors.New("resource already exists")
 )
+
+type Category struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+type Location struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+type Batch struct {
+	ID             int64   `json:"id"`
+	ItemID         int64   `json:"item_id"`
+	Quantity       int     `json:"quantity"`
+	ExpirationDate *string `json:"expiration_date"`
+	CreatedAt      string  `json:"created_at"`
+}
 
 type Store struct {
 	db *sql.DB
@@ -25,7 +46,6 @@ type Item struct {
 	ID        int64  `json:"id"`
 	Name      string `json:"name"`
 	Category  string `json:"category"`
-	Unit      string `json:"unit"`
 	Location  string `json:"location"`
 	Quantity  int    `json:"quantity"`
 	CreatedAt string `json:"created_at"`
@@ -45,7 +65,6 @@ type Movement struct {
 type ItemInput struct {
 	Name     string `json:"name"`
 	Category string `json:"category"`
-	Unit     string `json:"unit"`
 	Location string `json:"location"`
 }
 
@@ -81,7 +100,6 @@ func (s *Store) init() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
 			category TEXT NOT NULL DEFAULT '',
-			unit TEXT NOT NULL,
 			location TEXT NOT NULL DEFAULT '',
 			quantity INTEGER NOT NULL DEFAULT 0 CHECK (quantity >= 0),
 			created_at TEXT NOT NULL,
@@ -97,7 +115,25 @@ func (s *Store) init() error {
 			created_at TEXT NOT NULL,
 			FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS categories (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE
+		)`,
+		`CREATE TABLE IF NOT EXISTS locations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE
+		)`,
+		`CREATE TABLE IF NOT EXISTS batches (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			item_id INTEGER NOT NULL,
+			quantity INTEGER NOT NULL CHECK (quantity > 0),
+			expiration_date TEXT,
+			created_at TEXT NOT NULL,
+			FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_movements_item_id_id ON movements(item_id, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_batches_item_id ON batches(item_id, expiration_date, created_at)`,
+	
 	}
 	for _, statement := range statements {
 		if _, err := s.db.Exec(statement); err != nil {
@@ -108,7 +144,7 @@ func (s *Store) init() error {
 }
 
 func validateItemInput(input ItemInput) error {
-	if input.Name == "" || input.Unit == "" {
+	if input.Name == "" {
 		return ErrInvalidInput
 	}
 	return nil
@@ -118,13 +154,34 @@ func now() string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
 }
 
+func isUniqueConstraint(err error) bool {
+	return err != nil && (errors.Is(err, ErrDuplicate) || strings.Contains(err.Error(), "UNIQUE constraint failed"))
+}
+
+func scanBatch(scanner interface{ Scan(...any) error }) (Batch, error) {
+	var b Batch
+	err := scanner.Scan(&b.ID, &b.ItemID, &b.Quantity, &b.ExpirationDate, &b.CreatedAt)
+	return b, err
+}
+
+func scanCategory(scanner interface{ Scan(...any) error }) (Category, error) {
+	var c Category
+	err := scanner.Scan(&c.ID, &c.Name)
+	return c, err
+}
+
+func scanLocation(scanner interface{ Scan(...any) error }) (Location, error) {
+	var l Location
+	err := scanner.Scan(&l.ID, &l.Name)
+	return l, err
+}
+
 func scanItem(scanner interface{ Scan(...any) error }) (Item, error) {
 	var item Item
 	err := scanner.Scan(
 		&item.ID,
 		&item.Name,
 		&item.Category,
-		&item.Unit,
 		&item.Location,
 		&item.Quantity,
 		&item.CreatedAt,
@@ -133,4 +190,4 @@ func scanItem(scanner interface{ Scan(...any) error }) (Item, error) {
 	return item, err
 }
 
-const itemColumns = `id, name, category, unit, location, quantity, created_at, updated_at`
+const itemColumns = `id, name, category, location, quantity, created_at, updated_at`

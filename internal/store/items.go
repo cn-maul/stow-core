@@ -13,9 +13,9 @@ func (s *Store) CreateItem(ctx context.Context, input ItemInput) (Item, error) {
 	}
 	timestamp := now()
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO items (name, category, unit, location, quantity, created_at, updated_at)
-		VALUES (?, ?, ?, ?, 0, ?, ?)`,
-		input.Name, input.Category, input.Unit, input.Location, timestamp, timestamp,
+		INSERT INTO items (name, category, location, quantity, created_at, updated_at)
+		VALUES (?, ?, ?, 0, ?, ?)`,
+		input.Name, input.Category, input.Location, timestamp, timestamp,
 	)
 	if err != nil {
 		return Item{}, fmt.Errorf("create item: %w", err)
@@ -65,9 +65,9 @@ func (s *Store) UpdateItem(ctx context.Context, id int64, input ItemInput) (Item
 	}
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE items
-		SET name = ?, category = ?, unit = ?, location = ?, updated_at = ?
+		SET name = ?, category = ?, location = ?, updated_at = ?
 		WHERE id = ?`,
-		input.Name, input.Category, input.Unit, input.Location, now(), id,
+		input.Name, input.Category, input.Location, now(), id,
 	)
 	if err != nil {
 		return Item{}, fmt.Errorf("update item: %w", err)

@@ -26,7 +26,7 @@ func TestInventoryLifecycle(t *testing.T) {
 	s := testStore(t)
 
 	item, err := s.CreateItem(ctx, ItemInput{
-		Name: "Rice", Category: "Food", Unit: "bag", Location: "Kitchen",
+		Name: "Rice", Category: "Food", Location: "Kitchen",
 	})
 	if err != nil {
 		t.Fatalf("CreateItem() error = %v", err)
@@ -35,7 +35,7 @@ func TestInventoryLifecycle(t *testing.T) {
 		t.Fatalf("initial quantity = %d, want 0", item.Quantity)
 	}
 
-	item, err = s.StockIn(ctx, item.ID, 10, "initial stock")
+	item, err = s.StockIn(ctx, item.ID, 10, "initial stock", nil)
 	if err != nil {
 		t.Fatalf("StockIn() error = %v", err)
 	}
@@ -74,11 +74,11 @@ func TestInventoryLifecycle(t *testing.T) {
 func TestStockOutInsufficientLeavesInventoryUnchanged(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
-	item, err := s.CreateItem(ctx, ItemInput{Name: "Milk", Unit: "bottle"})
+	item, err := s.CreateItem(ctx, ItemInput{Name: "Milk"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.StockIn(ctx, item.ID, 2, ""); err != nil {
+	if _, err := s.StockIn(ctx, item.ID, 2, "", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -104,7 +104,7 @@ func TestStockOutInsufficientLeavesInventoryUnchanged(t *testing.T) {
 func TestAdjustNoChangeDoesNotCreateMovement(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
-	item, err := s.CreateItem(ctx, ItemInput{Name: "Soap", Unit: "bar"})
+	item, err := s.CreateItem(ctx, ItemInput{Name: "Soap"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,11 +123,11 @@ func TestAdjustNoChangeDoesNotCreateMovement(t *testing.T) {
 func TestDeleteRequiresZeroStock(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
-	item, err := s.CreateItem(ctx, ItemInput{Name: "Flour", Unit: "bag"})
+	item, err := s.CreateItem(ctx, ItemInput{Name: "Flour"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.StockIn(ctx, item.ID, 1, ""); err != nil {
+	if _, err := s.StockIn(ctx, item.ID, 1, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DeleteItem(ctx, item.ID); !errors.Is(err, ErrItemHasStock) {
@@ -141,5 +141,93 @@ func TestDeleteRequiresZeroStock(t *testing.T) {
 	}
 	if _, err := s.GetItem(ctx, item.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetItem() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStockInCreatesBatch(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	item, err := s.CreateItem(ctx, ItemInput{Name: "Coke"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exp := "2027-06-01"
+	if _, err := s.StockIn(ctx, item.ID, 12, "new batch", &exp); err != nil {
+		t.Fatal(err)
+	}
+	batches, err := s.ListBatches(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batches) != 1 {
+		t.Fatalf("batch count = %d, want 1", len(batches))
+	}
+	if batches[0].Quantity != 12 {
+		t.Fatalf("batch quantity = %d, want 12", batches[0].Quantity)
+	}
+	if batches[0].ExpirationDate == nil || *batches[0].ExpirationDate != "2027-06-01" {
+		t.Fatalf("batch expiration = %v, want 2027-06-01", batches[0].ExpirationDate)
+	}
+}
+
+func TestStockOutConsumesFIFOByExpiration(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	item, err := s.CreateItem(ctx, ItemInput{Name: "Juice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expFar := "2027-12-01"
+	expNear := "2027-01-01"
+
+	if _, err := s.StockIn(ctx, item.ID, 5, "", &expFar); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.StockIn(ctx, item.ID, 3, "", &expNear); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetItem(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Quantity != 8 {
+		t.Fatalf("total quantity = %d, want 8", got.Quantity)
+	}
+
+	if _, err := s.StockOut(ctx, item.ID, 4, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	batches, err := s.ListBatches(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batches) != 1 {
+		t.Fatalf("batch count = %d, want 1 (near batch consumed and deleted)", len(batches))
+	}
+	if batches[0].Quantity != 4 {
+		t.Fatalf("remaining batch quantity = %d, want 4", batches[0].Quantity)
+	}
+}
+
+func TestStockInWithoutExpiration(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	item, err := s.CreateItem(ctx, ItemInput{Name: "Water"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.StockIn(ctx, item.ID, 24, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	batches, err := s.ListBatches(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batches) != 1 {
+		t.Fatalf("batch count = %d, want 1", len(batches))
+	}
+	if batches[0].ExpirationDate != nil {
+		t.Fatalf("expiration_date = %v, want nil", batches[0].ExpirationDate)
 	}
 }

@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stow Core 功能测试</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f7; color: #1d1d1f; padding: 24px; }
+h1 { font-size: 24px; margin-bottom: 8px; }
+.subtitle { color: #86868b; margin-bottom: 24px; font-size: 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 16px; margin-bottom: 32px; }
+.card { background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.card h2 { font-size: 16px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.method { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; color: #fff; }
+.get { background: #34c759; }
+.post { background: #007aff; }
+.put { background: #ff9500; }
+.delete { background: #ff3b30; }
+.path { font-family: "SF Mono", "JetBrains Mono", monospace; font-size: 13px; color: #86868b; margin-left: auto; }
+.endpoint { margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.card label { display: block; font-size: 13px; font-weight: 500; margin-top: 10px; margin-bottom: 4px; color: #555; }
+.card input, .card textarea { width: 100%; padding: 8px 10px; border: 1px solid #d2d2d7; border-radius: 6px; font-size: 13px; font-family: "SF Mono", monospace; background: #fafafa; }
+.card textarea { min-height: 36px; resize: vertical; }
+.card textarea.response { min-height: 60px; background: #1d1d1f; color: #34c759; font-size: 12px; }
+.row2 { display: flex; gap: 8px; }
+.row2 > * { flex: 1; }
+button { margin-top: 10px; padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; color: #fff; background: #007aff; width: 100%; }
+button:hover { opacity: 0.85; }
+button.danger { background: #ff3b30; }
+.url-bar { display: flex; gap: 8px; margin-bottom: 24px; align-items: center; }
+.url-bar input { flex: 1; padding: 10px 14px; border: 1px solid #d2d2d7; border-radius: 8px; font-size: 14px; }
+.url-bar button { width: auto; margin-top: 0; padding: 10px 20px; background: #1d1d1f; }
+</style>
+</head>
+<body>
+<h1>Stow Core</h1>
+<p class="subtitle">所有测试操作直接调用后端 REST API，不模拟或缓存结果</p>
+
+<div class="url-bar">
+  <input id="baseUrl" value="http://127.0.0.1:8080" placeholder="Base URL">
+  <button onclick="testHealth()">检查连接</button>
+</div>
+
+<div class="grid" id="app">
+  <!-- Items -->
+  <div class="card">
+    <h2><span class="method get">GET</span>/api/items</h2>
+    <button onclick="listItems()">获取物品列表</button>
+    <textarea class="response" id="res-listItems" readonly placeholder="响应"></textarea>
+  </div>
+
+  <div class="card">
+    <h2><span class="method post">POST</span>/api/items</h2>
+    <label>名称 *</label><input id="in-createName" value="大米" placeholder="名称">
+    <div class="row2">
+      <div><label>分类</label><input id="in-createCategory" value="食品" placeholder="分类"></div>
+      <div><label>单位 *</label><input id="in-createUnit" value="袋" placeholder="单位"></div>
+    </div>
+    <label>存放位置</label><input id="in-createLocation" value="厨房" placeholder="位置">
+    <button onclick="createItem()">创建物品</button>
+    <textarea class="response" id="res-createItem" readonly placeholder="响应"></textarea>
+  </div>
+
+  <div class="card">
+    <h2><span class="method get">GET</span>/api/items/{id}</h2>
+    <label>物品 ID</label><input id="in-getId" value="1" placeholder="ID">
+    <button onclick="getItem()">查询详情</button>
+    <textarea class="response" id="res-getItem" readonly placeholder="响应"></textarea>
+  </div>
+
+  <div class="card">
+    <h2><span class="method put">PUT</span>/api/items/{id}</h2>
+    <label>物品 ID</label><input id="in-updateId" value="1" placeholder="ID">
+    <label>名称 *</label><input id="in-updateName" value="五常大米" placeholder="名称">
+    <div class="row2">
+      <div><label>分类</label><input id="in-updateCategory" value="食品" placeholder="分类"></div>
+      <div><label>单位 *</label><input id="in-updateUnit" value="袋" placeholder="单位"></div>
+    </div>
+    <label>存放位置</label><input id="in-updateLocation" value="储物间" placeholder="位置">
+    <button onclick="updateItem()">更新物品</button>
+    <textarea class="response" id="res-updateItem" readonly placeholder="响应"></textarea>
+  </div>
+
+  <div class="card">
+    <h2><span class="method delete">DELETE</span>/api/items/{id}</h2>
+    <label>物品 ID</label><input id="in-deleteId" value="1" placeholder="ID">
+    <button class="danger" onclick="deleteItem()">删除物品</button>
+    <textarea class="response" id="res-deleteItem" readonly placeholder="响应"></textarea>
+  </div>
+
+  <!-- Inventory -->
+  <div class="card">
+    <h2><span class="method post">POST</span>/api/items/{id}/stock-in</h2>
+    <label>物品 ID</label><input id="in-siId" value="1" placeholder="ID">
+    <div class="row2">
+      <div><label>数量</label><input id="in-siQty" value="10" placeholder="数量"></div>
+      <div><label>备注</label><input id="in-siNote" value="补货" placeholder="备注"></div>
+    </div>
+    <button onclick="stockIn()">入库</button>
+    <textarea class="response" id="res-stockIn" readonly placeholder="响应"></textarea>
+  </div>
+
+  <div class="card">
+    <h2><span class="method post">POST</span>/api/items/{id}/stock-out</h2>
+    <label>物品 ID</label><input id="in-soId" value="1" placeholder="ID">
+    <div class="row2">
+      <div><label>数量</label><input id="in-soQty" value="3" placeholder="数量"></div>
+      <div><label>备注</label><input id="in-soNote" value="使用" placeholder="备注"></div>
+    </div>
+    <button onclick="stockOut()">出库</button>
+    <textarea class="response" id="res-stockOut" readonly placeholder="响应"></textarea>
+  </div>
+
+  <div class="card">
+    <h2><span class="method post">POST</span>/api/items/{id}/adjust</h2>
+    <label>物品 ID</label><input id="in-adjId" value="1" placeholder="ID">
+    <div class="row2">
+      <div><label>实际数量</label><input id="in-adjQty" value="5" placeholder="实际数量"></div>
+      <div><label>备注</label><input id="in-adjNote" value="盘点" placeholder="备注"></div>
+    </div>
+    <button onclick="adjust()">盘点</button>
+    <textarea class="response" id="res-adjust" readonly placeholder="响应"></textarea>
+  </div>
+
+  <div class="card">
+    <h2><span class="method get">GET</span>/api/items/{id}/movements</h2>
+    <label>物品 ID</label><input id="in-movId" value="1" placeholder="ID">
+    <button onclick="listMovements()">查询流水</button>
+    <textarea class="response" id="res-listMovements" readonly placeholder="响应"></textarea>
+  </div>
+</div>
+
+<script>
+const baseInput = document.getElementById('baseUrl');
+
+function base() { return baseInput.value.replace(/\/+$/, ''); }
+
+async function api(method, path, body) {
+  const url = base() + path;
+  const opts = { method, headers: { 'Accept': 'application/json' } };
+  if (body != null) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(url, opts);
+  const text = await res.text();
+  let pretty;
+  try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch { pretty = text; }
+  const status = res.status;
+  const icon = status >= 200 && status < 300 ? '✓' : '✗';
+  return { status, icon, text: pretty };
+}
+
+function show(id, result) {
+  const el = document.getElementById(id);
+  el.value = `${result.icon} [${result.status}] ${result.text}`;
+}
+
+async function testHealth() {
+  const res = await api('GET', '/health');
+  const el = document.getElementById('res-listItems');
+  el.value = `${res.icon} [${res.status}] ${res.text}`;
+}
+
+async function listItems() {
+  const res = await api('GET', '/api/items');
+  show('res-listItems', res);
+}
+
+async function createItem() {
+  const body = {
+    name: document.getElementById('in-createName').value,
+    category: document.getElementById('in-createCategory').value,
+    unit: document.getElementById('in-createUnit').value,
+    location: document.getElementById('in-createLocation').value,
+  };
+  const res = await api('POST', '/api/items', body);
+  show('res-createItem', res);
+}
+
+async function getItem() {
+  const id = document.getElementById('in-getId').value;
+  const res = await api('GET', `/api/items/${id}`);
+  show('res-getItem', res);
+}
+
+async function updateItem() {
+  const id = document.getElementById('in-updateId').value;
+  const body = {
+    name: document.getElementById('in-updateName').value,
+    category: document.getElementById('in-updateCategory').value,
+    unit: document.getElementById('in-updateUnit').value,
+    location: document.getElementById('in-updateLocation').value,
+  };
+  const res = await api('PUT', `/api/items/${id}`, body);
+  show('res-updateItem', res);
+}
+
+async function deleteItem() {
+  const id = document.getElementById('in-deleteId').value;
+  if (!confirm(`确定删除物品 ${id}？`)) return;
+  const res = await api('DELETE', `/api/items/${id}`);
+  show('res-deleteItem', res);
+}
+
+async function stockIn() {
+  const id = document.getElementById('in-siId').value;
+  const body = {
+    quantity: parseInt(document.getElementById('in-siQty').value),
+    note: document.getElementById('in-siNote').value,
+  };
+  const res = await api('POST', `/api/items/${id}/stock-in`, body);
+  show('res-stockIn', res);
+}
+
+async function stockOut() {
+  const id = document.getElementById('in-soId').value;
+  const body = {
+    quantity: parseInt(document.getElementById('in-soQty').value),
+    note: document.getElementById('in-soNote').value,
+  };
+  const res = await api('POST', `/api/items/${id}/stock-out`, body);
+  show('res-stockOut', res);
+}
+
+async function adjust() {
+  const id = document.getElementById('in-adjId').value;
+  const body = {
+    quantity: parseInt(document.getElementById('in-adjQty').value),
+    note: document.getElementById('in-adjNote').value,
+  };
+  const res = await api('POST', `/api/items/${id}/adjust`, body);
+  show('res-adjust', res);
+}
+
+async function listMovements() {
+  const id = document.getElementById('in-movId').value;
+  const res = await api('GET', `/api/items/${id}/movements`);
+  show('res-listMovements', res);
+}
+</script>
+</body>
+</html>
