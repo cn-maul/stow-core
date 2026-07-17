@@ -1,0 +1,24 @@
+# Build output
+stow-core
+stow-core.exe
+*.exe
+*.test
+*.out
+
+# Runtime data
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
+
+# Local configuration
+.env
+.env.*
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
