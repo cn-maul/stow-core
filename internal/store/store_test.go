@@ -231,3 +231,72 @@ func TestStockInWithoutExpiration(t *testing.T) {
 		t.Fatalf("expiration_date = %v, want nil", batches[0].ExpirationDate)
 	}
 }
+
+func TestCategoryRenameCascadesToItems(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+
+	c1, err := s.CreateCategory(ctx, "OldCat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := s.CreateItem(ctx, ItemInput{Name: "Rice", Category: "OldCat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c1, err = s.UpdateCategory(ctx, c1.ID, "NewCat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c1.Name != "NewCat" {
+		t.Fatalf("category name = %s, want NewCat", c1.Name)
+	}
+
+	item, err = s.GetItem(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Category != "NewCat" {
+		t.Fatalf("item category = %s, want NewCat", item.Category)
+	}
+
+	// Delete NewCat should fail because item references it
+	if err := s.DeleteCategory(ctx, c1.ID); !errors.Is(err, ErrInUse) {
+		t.Fatalf("DeleteCategory() error = %v, want ErrInUse", err)
+	}
+}
+
+func TestLocationRenameCascadesToItems(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+
+	l1, err := s.CreateLocation(ctx, "OldLoc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := s.CreateItem(ctx, ItemInput{Name: "Salt", Location: "OldLoc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	l1, err = s.UpdateLocation(ctx, l1.ID, "NewLoc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l1.Name != "NewLoc" {
+		t.Fatalf("location name = %s, want NewLoc", l1.Name)
+	}
+
+	item, err = s.GetItem(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Location != "NewLoc" {
+		t.Fatalf("item location = %s, want NewLoc", item.Location)
+	}
+
+	if err := s.DeleteLocation(ctx, l1.ID); !errors.Is(err, ErrInUse) {
+		t.Fatalf("DeleteLocation() error = %v, want ErrInUse", err)
+	}
+}

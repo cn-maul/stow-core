@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	"stow-core/internal/store"
 )
 
@@ -18,7 +19,7 @@ type nameInput struct {
 
 type App struct {
 	store      *store.Store
-	mux        *http.ServeMux
+	engine     *gin.Engine
 	keys       []string
 	versionStr string
 }
@@ -29,443 +30,434 @@ type stockInput struct {
 	ExpirationDate *string `json:"expiration_date"`
 }
 
-
-
 func New(s *store.Store, version string, keys []string) *App {
-	a := &App{store: s, mux: http.NewServeMux(), keys: keys, versionStr: version}
-	a.routes()
+	gin.SetMode(gin.ReleaseMode)
+	a := &App{
+		store:      s,
+		engine:     gin.New(),
+		keys:       keys,
+		versionStr: version,
+	}
+	a.engine.Use(gin.Recovery())
+	a.setup()
 	return a
 }
 
 func (a *App) Handler() http.Handler {
-	var h http.Handler = a.mux
-	if len(a.keys) > 0 {
-		h = authMiddleware(h, a.keys)
-	}
-	return corsMiddleware(h)
+	return a.engine
 }
 
-func authMiddleware(next http.Handler, keys []string) http.Handler {
+func (a *App) setup() {
+	a.engine.Use(corsMiddleware)
+	if len(a.keys) > 0 {
+		a.engine.Use(authMiddleware(a.keys))
+	}
+
+	a.engine.GET("/health", a.health)
+	a.engine.GET("/version", a.version)
+
+	a.engine.GET("/api/items", a.listItems)
+	a.engine.POST("/api/items", a.createItem)
+	a.engine.GET("/api/items/:id", a.getItem)
+	a.engine.PUT("/api/items/:id", a.updateItem)
+	a.engine.DELETE("/api/items/:id", a.deleteItem)
+	a.engine.POST("/api/items/:id/stock-in", a.stockIn)
+	a.engine.POST("/api/items/:id/stock-out", a.stockOut)
+	a.engine.POST("/api/items/:id/adjust", a.adjust)
+	a.engine.GET("/api/items/:id/batches", a.listBatches)
+	a.engine.GET("/api/items/:id/movements", a.listMovements)
+
+	a.engine.GET("/api/categories", a.listCategories)
+	a.engine.POST("/api/categories", a.createCategory)
+	a.engine.GET("/api/categories/:id", a.getCategory)
+	a.engine.PUT("/api/categories/:id", a.updateCategory)
+	a.engine.DELETE("/api/categories/:id", a.deleteCategory)
+
+	a.engine.GET("/api/locations", a.listLocations)
+	a.engine.POST("/api/locations", a.createLocation)
+	a.engine.GET("/api/locations/:id", a.getLocation)
+	a.engine.PUT("/api/locations/:id", a.updateLocation)
+	a.engine.DELETE("/api/locations/:id", a.deleteLocation)
+
+	a.engine.GET("/api/export", a.export)
+	a.engine.POST("/api/import", a.importData)
+}
+
+func corsMiddleware(c *gin.Context) {
+	c.Header("Access-Control-Allow-Origin", "*")
+	c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Stow-Key")
+	if c.Request.Method == http.MethodOptions {
+		c.AbortWithStatus(http.StatusNoContent)
+		return
+	}
+	c.Next()
+}
+
+func authMiddleware(keys []string) gin.HandlerFunc {
 	keySet := make(map[string]bool, len(keys))
 	for _, k := range keys {
 		keySet[k] = true
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodOptions {
-			next.ServeHTTP(w, r)
+	return func(c *gin.Context) {
+		if c.Request.Method == http.MethodOptions {
+			c.Next()
 			return
 		}
-		key := r.Header.Get("X-Stow-Key")
+		key := c.GetHeader("X-Stow-Key")
 		if key == "" {
-			http.Error(w, `{"error":"missing X-Stow-Key header"}`, http.StatusUnauthorized)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing X-Stow-Key header"})
 			return
 		}
 		if !keySet[key] {
-			http.Error(w, `{"error":"invalid key"}`, http.StatusUnauthorized)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid key"})
 			return
 		}
-		next.ServeHTTP(w, r)
-	})
+		c.Next()
+	}
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Stow-Key")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (a *App) routes() {
-	a.mux.HandleFunc("GET /health", a.health)
-	a.mux.HandleFunc("GET /version", a.version)
-
-	a.mux.HandleFunc("GET /api/items", a.listItems)
-	a.mux.HandleFunc("POST /api/items", a.createItem)
-	a.mux.HandleFunc("GET /api/items/{id}", a.getItem)
-	a.mux.HandleFunc("PUT /api/items/{id}", a.updateItem)
-	a.mux.HandleFunc("DELETE /api/items/{id}", a.deleteItem)
-	a.mux.HandleFunc("POST /api/items/{id}/stock-in", a.stockIn)
-	a.mux.HandleFunc("POST /api/items/{id}/stock-out", a.stockOut)
-	a.mux.HandleFunc("POST /api/items/{id}/adjust", a.adjust)
-	a.mux.HandleFunc("GET /api/items/{id}/batches", a.listBatches)
-	a.mux.HandleFunc("GET /api/items/{id}/movements", a.listMovements)
-
-	a.mux.HandleFunc("GET /api/categories", a.listCategories)
-	a.mux.HandleFunc("POST /api/categories", a.createCategory)
-	a.mux.HandleFunc("GET /api/categories/{id}", a.getCategory)
-	a.mux.HandleFunc("PUT /api/categories/{id}", a.updateCategory)
-	a.mux.HandleFunc("DELETE /api/categories/{id}", a.deleteCategory)
-
-	a.mux.HandleFunc("GET /api/locations", a.listLocations)
-	a.mux.HandleFunc("POST /api/locations", a.createLocation)
-	a.mux.HandleFunc("GET /api/locations/{id}", a.getLocation)
-	a.mux.HandleFunc("PUT /api/locations/{id}", a.updateLocation)
-	a.mux.HandleFunc("DELETE /api/locations/{id}", a.deleteLocation)
-
-	a.mux.HandleFunc("GET /api/export", a.export)
-	a.mux.HandleFunc("POST /api/import", a.importData)
-}
-
-func (a *App) health(w http.ResponseWriter, r *http.Request) {
-	if err := a.store.Ping(r.Context()); err != nil {
-		writeError(w, http.StatusServiceUnavailable, "database unavailable")
+func (a *App) health(c *gin.Context) {
+	if err := a.store.Ping(c.Request.Context()); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "database unavailable"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-func (a *App) version(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"version": a.versionStr})
+func (a *App) version(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"version": a.versionStr})
 }
 
-func (a *App) export(w http.ResponseWriter, r *http.Request) {
-	data, err := a.store.Export(r.Context())
+func (a *App) export(c *gin.Context) {
+	data, err := a.store.Export(c.Request.Context())
 	if err != nil {
-		handleError(w, err)
+		handleError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, data)
+	c.JSON(http.StatusOK, data)
 }
 
-func (a *App) importData(w http.ResponseWriter, r *http.Request) {
+func (a *App) importData(c *gin.Context) {
 	var data store.ExportData
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<22)
-	decoder := json.NewDecoder(r.Body)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<22)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&data); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "request body must contain one JSON object"})
 		return
 	}
 	if data.Version == "" {
-		writeError(w, http.StatusBadRequest, "missing version field")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing version field"})
 		return
 	}
-	if err := a.store.Import(r.Context(), data); err != nil {
-		handleError(w, err)
+	if err := a.store.Import(c.Request.Context(), data); err != nil {
+		handleError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "imported"})
+	c.JSON(http.StatusOK, gin.H{"status": "imported"})
 }
 
-func (a *App) listItems(w http.ResponseWriter, r *http.Request) {
-	items, err := a.store.ListItems(r.Context())
+func (a *App) listItems(c *gin.Context) {
+	items, err := a.store.ListItems(c.Request.Context())
 	if err != nil {
-		handleError(w, err)
+		handleError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, items)
+	c.JSON(http.StatusOK, items)
 }
 
-func (a *App) createItem(w http.ResponseWriter, r *http.Request) {
+func (a *App) createItem(c *gin.Context) {
 	var input store.ItemInput
-	if err := decodeJSON(w, r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := decodeJSON(c, &input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	input.Name = strings.TrimSpace(input.Name)
-	item, err := a.store.CreateItem(r.Context(), input)
+	item, err := a.store.CreateItem(c.Request.Context(), input)
 	if err != nil {
-		handleError(w, err)
+		handleError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, item)
+	c.JSON(http.StatusCreated, item)
 }
 
-func (a *App) getItem(w http.ResponseWriter, r *http.Request) {
-	id, ok := itemID(w, r)
+func (a *App) getItem(c *gin.Context) {
+	id, ok := parseID(c, "item")
 	if !ok {
 		return
 	}
-	item, err := a.store.GetItem(r.Context(), id)
+	item, err := a.store.GetItem(c.Request.Context(), id)
 	if err != nil {
-		handleError(w, err)
+		handleError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, item)
+	c.JSON(http.StatusOK, item)
 }
 
-func (a *App) updateItem(w http.ResponseWriter, r *http.Request) {
-	id, ok := itemID(w, r)
+func (a *App) updateItem(c *gin.Context) {
+	id, ok := parseID(c, "item")
 	if !ok {
 		return
 	}
 	var input store.ItemInput
-	if err := decodeJSON(w, r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := decodeJSON(c, &input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	input.Name = strings.TrimSpace(input.Name)
-	item, err := a.store.UpdateItem(r.Context(), id, input)
+	item, err := a.store.UpdateItem(c.Request.Context(), id, input)
 	if err != nil {
-		handleError(w, err)
+		handleError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, item)
+	c.JSON(http.StatusOK, item)
 }
 
-func (a *App) deleteItem(w http.ResponseWriter, r *http.Request) {
-	id, ok := itemID(w, r)
+func (a *App) deleteItem(c *gin.Context) {
+	id, ok := parseID(c, "item")
 	if !ok {
 		return
 	}
-	if err := a.store.DeleteItem(r.Context(), id); err != nil {
-		handleError(w, err)
+	if err := a.store.DeleteItem(c.Request.Context(), id); err != nil {
+		handleError(c, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	c.Status(http.StatusNoContent)
 }
 
-func (a *App) stockIn(w http.ResponseWriter, r *http.Request) {
-	id, ok := itemID(w, r)
+func (a *App) stockIn(c *gin.Context) {
+	id, ok := parseID(c, "item")
 	if !ok {
 		return
 	}
 	var input stockInput
-	if err := decodeJSON(w, r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := decodeJSON(c, &input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	item, err := a.store.StockIn(r.Context(), id, input.Quantity, input.Note, input.ExpirationDate)
+	item, err := a.store.StockIn(c.Request.Context(), id, input.Quantity, input.Note, input.ExpirationDate)
 	if err != nil {
-		handleError(w, err)
+		handleError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, item)
+	c.JSON(http.StatusOK, item)
 }
 
-func (a *App) stockOut(w http.ResponseWriter, r *http.Request) {
-	id, ok := itemID(w, r)
+func (a *App) stockOut(c *gin.Context) {
+	id, ok := parseID(c, "item")
 	if !ok {
 		return
 	}
 	var input stockInput
-	if err := decodeJSON(w, r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := decodeJSON(c, &input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	item, err := a.store.StockOut(r.Context(), id, input.Quantity, input.Note)
+	item, err := a.store.StockOut(c.Request.Context(), id, input.Quantity, input.Note)
 	if err != nil {
-		handleError(w, err)
+		handleError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, item)
+	c.JSON(http.StatusOK, item)
 }
 
-func (a *App) adjust(w http.ResponseWriter, r *http.Request) {
-	id, ok := itemID(w, r)
+func (a *App) adjust(c *gin.Context) {
+	id, ok := parseID(c, "item")
 	if !ok {
 		return
 	}
 	var input stockInput
-	if err := decodeJSON(w, r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := decodeJSON(c, &input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	item, err := a.store.Adjust(r.Context(), id, input.Quantity, input.Note)
+	item, err := a.store.Adjust(c.Request.Context(), id, input.Quantity, input.Note)
 	if err != nil {
-		handleError(w, err)
+		handleError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, item)
+	c.JSON(http.StatusOK, item)
 }
 
-func (a *App) listBatches(w http.ResponseWriter, r *http.Request) {
-	id, ok := itemID(w, r)
+func (a *App) listBatches(c *gin.Context) {
+	id, ok := parseID(c, "item")
 	if !ok {
 		return
 	}
-	batches, err := a.store.ListBatches(r.Context(), id)
+	batches, err := a.store.ListBatches(c.Request.Context(), id)
 	if err != nil {
-		handleError(w, err)
+		handleError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, batches)
+	c.JSON(http.StatusOK, batches)
 }
 
-func (a *App) listMovements(w http.ResponseWriter, r *http.Request) {
-	id, ok := itemID(w, r)
+func (a *App) listMovements(c *gin.Context) {
+	id, ok := parseID(c, "item")
 	if !ok {
 		return
 	}
-	movements, err := a.store.ListMovements(r.Context(), id)
+	movements, err := a.store.ListMovements(c.Request.Context(), id)
 	if err != nil {
-		handleError(w, err)
+		handleError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, movements)
+	c.JSON(http.StatusOK, movements)
 }
 
-func (a *App) listCategories(w http.ResponseWriter, r *http.Request) {
-	categories, err := a.store.ListCategories(r.Context())
+func (a *App) listCategories(c *gin.Context) {
+	categories, err := a.store.ListCategories(c.Request.Context())
 	if err != nil {
-		handleError(w, err)
+		handleError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, categories)
+	c.JSON(http.StatusOK, categories)
 }
 
-func (a *App) createCategory(w http.ResponseWriter, r *http.Request) {
+func (a *App) createCategory(c *gin.Context) {
 	var input nameInput
-	if err := decodeJSON(w, r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := decodeJSON(c, &input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	input.Name = strings.TrimSpace(input.Name)
-	category, err := a.store.CreateCategory(r.Context(), input.Name)
+	category, err := a.store.CreateCategory(c.Request.Context(), input.Name)
 	if err != nil {
-		handleError(w, err)
+		handleError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, category)
+	c.JSON(http.StatusCreated, category)
 }
 
-func (a *App) getCategory(w http.ResponseWriter, r *http.Request) {
-	id, ok := categoryID(w, r)
+func (a *App) getCategory(c *gin.Context) {
+	id, ok := parseID(c, "category")
 	if !ok {
 		return
 	}
-	category, err := a.store.GetCategory(r.Context(), id)
+	category, err := a.store.GetCategory(c.Request.Context(), id)
 	if err != nil {
-		handleError(w, err)
+		handleError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, category)
+	c.JSON(http.StatusOK, category)
 }
 
-func (a *App) updateCategory(w http.ResponseWriter, r *http.Request) {
-	id, ok := categoryID(w, r)
-	if !ok {
-		return
-	}
-	var input nameInput
-	if err := decodeJSON(w, r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	input.Name = strings.TrimSpace(input.Name)
-	category, err := a.store.UpdateCategory(r.Context(), id, input.Name)
-	if err != nil {
-		handleError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, category)
-}
-
-func (a *App) deleteCategory(w http.ResponseWriter, r *http.Request) {
-	id, ok := categoryID(w, r)
-	if !ok {
-		return
-	}
-	if err := a.store.DeleteCategory(r.Context(), id); err != nil {
-		handleError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (a *App) listLocations(w http.ResponseWriter, r *http.Request) {
-	locations, err := a.store.ListLocations(r.Context())
-	if err != nil {
-		handleError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, locations)
-}
-
-func (a *App) createLocation(w http.ResponseWriter, r *http.Request) {
-	var input nameInput
-	if err := decodeJSON(w, r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	input.Name = strings.TrimSpace(input.Name)
-	location, err := a.store.CreateLocation(r.Context(), input.Name)
-	if err != nil {
-		handleError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, location)
-}
-
-func (a *App) getLocation(w http.ResponseWriter, r *http.Request) {
-	id, ok := locationID(w, r)
-	if !ok {
-		return
-	}
-	location, err := a.store.GetLocation(r.Context(), id)
-	if err != nil {
-		handleError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, location)
-}
-
-func (a *App) updateLocation(w http.ResponseWriter, r *http.Request) {
-	id, ok := locationID(w, r)
+func (a *App) updateCategory(c *gin.Context) {
+	id, ok := parseID(c, "category")
 	if !ok {
 		return
 	}
 	var input nameInput
-	if err := decodeJSON(w, r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := decodeJSON(c, &input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	input.Name = strings.TrimSpace(input.Name)
-	location, err := a.store.UpdateLocation(r.Context(), id, input.Name)
+	category, err := a.store.UpdateCategory(c.Request.Context(), id, input.Name)
 	if err != nil {
-		handleError(w, err)
+		handleError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, location)
+	c.JSON(http.StatusOK, category)
 }
 
-func (a *App) deleteLocation(w http.ResponseWriter, r *http.Request) {
-	id, ok := locationID(w, r)
+func (a *App) deleteCategory(c *gin.Context) {
+	id, ok := parseID(c, "category")
 	if !ok {
 		return
 	}
-	if err := a.store.DeleteLocation(r.Context(), id); err != nil {
-		handleError(w, err)
+	if err := a.store.DeleteCategory(c.Request.Context(), id); err != nil {
+		handleError(c, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	c.Status(http.StatusNoContent)
 }
 
-func itemID(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+func (a *App) listLocations(c *gin.Context) {
+	locations, err := a.store.ListLocations(c.Request.Context())
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, locations)
+}
+
+func (a *App) createLocation(c *gin.Context) {
+	var input nameInput
+	if err := decodeJSON(c, &input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	location, err := a.store.CreateLocation(c.Request.Context(), input.Name)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, location)
+}
+
+func (a *App) getLocation(c *gin.Context) {
+	id, ok := parseID(c, "location")
+	if !ok {
+		return
+	}
+	location, err := a.store.GetLocation(c.Request.Context(), id)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, location)
+}
+
+func (a *App) updateLocation(c *gin.Context) {
+	id, ok := parseID(c, "location")
+	if !ok {
+		return
+	}
+	var input nameInput
+	if err := decodeJSON(c, &input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	location, err := a.store.UpdateLocation(c.Request.Context(), id, input.Name)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, location)
+}
+
+func (a *App) deleteLocation(c *gin.Context) {
+	id, ok := parseID(c, "location")
+	if !ok {
+		return
+	}
+	if err := a.store.DeleteLocation(c.Request.Context(), id); err != nil {
+		handleError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func parseID(c *gin.Context, resource string) (int64, bool) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid item id")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid " + resource + " id"})
 		return 0, false
 	}
 	return id, true
 }
 
-func categoryID(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid category id")
-		return 0, false
-	}
-	return id, true
-}
-
-func locationID(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid location id")
-		return 0, false
-	}
-	return id, true
-}
-
-func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	decoder := json.NewDecoder(r.Body)
+func decodeJSON(c *gin.Context, target any) error {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
+	decoder := json.NewDecoder(c.Request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return errors.New("invalid JSON body")
@@ -476,34 +468,26 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {
 	return nil
 }
 
-func handleError(w http.ResponseWriter, err error) {
+func handleError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, err.Error())
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 	case errors.Is(err, store.ErrInvalidInput):
-		writeError(w, http.StatusBadRequest, err.Error())
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	case errors.Is(err, store.ErrInsufficientStock):
-		writeError(w, http.StatusConflict, err.Error())
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	// Added by user later
 	case errors.Is(err, store.ErrItemHasStock):
-		writeError(w, http.StatusConflict, err.Error())
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	// Added by user later
 	case errors.Is(err, store.ErrInUse):
-		writeError(w, http.StatusConflict, err.Error())
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	// Added by user later
 	case errors.Is(err, store.ErrDuplicate):
-		writeError(w, http.StatusConflict, err.Error())
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	// Added by user later
 	default:
 		log.Printf("request failed: %v", err)
-		writeError(w, http.StatusInternalServerError, "internal server error")
-	}
-}
-
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
-}
-
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		log.Printf("encode response: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 	}
 }

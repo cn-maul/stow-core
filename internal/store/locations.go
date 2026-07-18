@@ -63,22 +63,39 @@ func (s *Store) UpdateLocation(ctx context.Context, id int64, name string) (Loca
 	if name == "" {
 		return Location{}, ErrInvalidInput
 	}
-	result, err := s.db.ExecContext(ctx,
-		`UPDATE locations SET name = ? WHERE id = ?`, name, id,
-	)
+
+	l, err := s.GetLocation(ctx, id)
+	if err != nil {
+		return Location{}, err
+	}
+	if l.Name == name {
+		return l, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Location{}, fmt.Errorf("begin update location tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx, `UPDATE locations SET name = ? WHERE id = ?`, name, id)
 	if err != nil {
 		if isUniqueConstraint(err) {
 			return Location{}, ErrDuplicate
 		}
 		return Location{}, fmt.Errorf("update location: %w", err)
 	}
-	rows, err := result.RowsAffected()
+
+	// Cascade to items
+	_, err = tx.ExecContext(ctx, `UPDATE items SET location = ? WHERE location = ?`, name, l.Name)
 	if err != nil {
-		return Location{}, fmt.Errorf("check update location: %w", err)
+		return Location{}, fmt.Errorf("cascade location to items: %w", err)
 	}
-	if rows == 0 {
-		return Location{}, ErrNotFound
+
+	if err := tx.Commit(); err != nil {
+		return Location{}, fmt.Errorf("commit update location: %w", err)
 	}
+
 	return s.GetLocation(ctx, id)
 }
 

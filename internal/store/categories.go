@@ -63,22 +63,39 @@ func (s *Store) UpdateCategory(ctx context.Context, id int64, name string) (Cate
 	if name == "" {
 		return Category{}, ErrInvalidInput
 	}
-	result, err := s.db.ExecContext(ctx,
-		`UPDATE categories SET name = ? WHERE id = ?`, name, id,
-	)
+
+	c, err := s.GetCategory(ctx, id)
+	if err != nil {
+		return Category{}, err
+	}
+	if c.Name == name {
+		return c, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Category{}, fmt.Errorf("begin update category tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx, `UPDATE categories SET name = ? WHERE id = ?`, name, id)
 	if err != nil {
 		if isUniqueConstraint(err) {
 			return Category{}, ErrDuplicate
 		}
 		return Category{}, fmt.Errorf("update category: %w", err)
 	}
-	rows, err := result.RowsAffected()
+
+	// Cascade to items
+	_, err = tx.ExecContext(ctx, `UPDATE items SET category = ? WHERE category = ?`, name, c.Name)
 	if err != nil {
-		return Category{}, fmt.Errorf("check update category: %w", err)
+		return Category{}, fmt.Errorf("cascade category to items: %w", err)
 	}
-	if rows == 0 {
-		return Category{}, ErrNotFound
+
+	if err := tx.Commit(); err != nil {
+		return Category{}, fmt.Errorf("commit update category: %w", err)
 	}
+
 	return s.GetCategory(ctx, id)
 }
 

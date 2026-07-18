@@ -23,8 +23,8 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	if cfg.Addr == "" {
-		cfg.Addr = "127.0.0.1:8080"
+		if cfg.Addr == "" {
+		cfg.Addr = "0.0.0.0:8080"
 	}
 	if cfg.DB == "" {
 		cfg.DB = "data/stow.db"
