@@ -6,6 +6,16 @@
 - 请求体：`application/json`
 - 响应体：`application/json; charset=utf-8`
 
+## 认证
+
+配置了密钥后，所有请求需携带 `X-Stow-Key` 头。密钥格式为 `stow-xxxxxx`（6 位数字字母）。
+
+```bash
+curl -H "X-Stow-Key: stow-aB12Cd" http://127.0.0.1:8080/health
+```
+
+未认证时返回 **401**。
+
 ## 数据模型
 
 ### Item（物品）
@@ -300,6 +310,72 @@ DELETE /api/locations/{id}
 
 仅允许删除未被任何物品引用的位置。**响应 204。** 有物品引用时返回 **409**。
 
+## 版本
+
+```http
+GET /version
+```
+
+**响应 200：**
+```json
+{"version":"1.0.2"}
+```
+
+## 数据导出
+
+```http
+GET /api/export
+```
+
+**响应 200：**
+```json
+{
+  "version": "1.0.2",
+  "categories": [{"id": 1, "name": "食品"}],
+  "locations": [{"id": 1, "name": "厨房"}],
+  "items": [
+    {
+      "name": "大米",
+      "category": "食品",
+      "location": "厨房",
+      "batches": [
+        {"quantity": 5, "expiration_date": "2027-06-01"}
+      ]
+    }
+  ]
+}
+```
+
+## 数据导入
+
+```http
+POST /api/import
+Content-Type: application/json
+
+{
+  "version": "1.0.2",
+  "categories": [{"name": "食品"}],
+  "locations": [{"name": "厨房"}],
+  "items": [
+    {
+      "name": "大米",
+      "category": "食品",
+      "location": "厨房",
+      "batches": [
+        {"quantity": 5, "expiration_date": "2027-06-01"}
+      ]
+    }
+  ]
+}
+```
+
+`version` 必填。分类和位置按名称去重，物品直接导入，批次按导出时的数据恢复。
+
+**响应 200：**
+```json
+{"status":"imported"}
+```
+
 ## 健康检查
 
 ```http
@@ -319,7 +395,8 @@ GET /health
 | --- | --- |
 | 400 | 请求参数错误 |
 | 404 | 资源不存在 |
-| 409 | 冲突（库存不足、仍有库存、重名、被引用等） |
+  409 | 冲突（库存不足、仍有库存、重名、被引用等）
+| 401 | 未认证或密钥无效 |
 | 500 | 服务端内部错误 |
 
 错误响应格式：

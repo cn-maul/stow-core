@@ -17,8 +17,10 @@ type nameInput struct {
 }
 
 type App struct {
-	store *store.Store
-	mux   *http.ServeMux
+	store      *store.Store
+	mux        *http.ServeMux
+	keys       []string
+	versionStr string
 }
 
 type stockInput struct {
@@ -29,21 +31,48 @@ type stockInput struct {
 
 
 
-func New(s *store.Store) *App {
-	a := &App{store: s, mux: http.NewServeMux()}
+func New(s *store.Store, version string, keys []string) *App {
+	a := &App{store: s, mux: http.NewServeMux(), keys: keys, versionStr: version}
 	a.routes()
 	return a
 }
 
 func (a *App) Handler() http.Handler {
-	return corsMiddleware(a.mux)
+	var h http.Handler = a.mux
+	if len(a.keys) > 0 {
+		h = authMiddleware(h, a.keys)
+	}
+	return corsMiddleware(h)
+}
+
+func authMiddleware(next http.Handler, keys []string) http.Handler {
+	keySet := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		keySet[k] = true
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+		key := r.Header.Get("X-Stow-Key")
+		if key == "" {
+			http.Error(w, `{"error":"missing X-Stow-Key header"}`, http.StatusUnauthorized)
+			return
+		}
+		if !keySet[key] {
+			http.Error(w, `{"error":"invalid key"}`, http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Stow-Key")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -54,6 +83,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 func (a *App) routes() {
 	a.mux.HandleFunc("GET /health", a.health)
+	a.mux.HandleFunc("GET /version", a.version)
 
 	a.mux.HandleFunc("GET /api/items", a.listItems)
 	a.mux.HandleFunc("POST /api/items", a.createItem)
@@ -77,6 +107,9 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/locations/{id}", a.getLocation)
 	a.mux.HandleFunc("PUT /api/locations/{id}", a.updateLocation)
 	a.mux.HandleFunc("DELETE /api/locations/{id}", a.deleteLocation)
+
+	a.mux.HandleFunc("GET /api/export", a.export)
+	a.mux.HandleFunc("POST /api/import", a.importData)
 }
 
 func (a *App) health(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +118,38 @@ func (a *App) health(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (a *App) version(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"version": a.versionStr})
+}
+
+func (a *App) export(w http.ResponseWriter, r *http.Request) {
+	data, err := a.store.Export(r.Context())
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+func (a *App) importData(w http.ResponseWriter, r *http.Request) {
+	var data store.ExportData
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<22)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&data); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if data.Version == "" {
+		writeError(w, http.StatusBadRequest, "missing version field")
+		return
+	}
+	if err := a.store.Import(r.Context(), data); err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "imported"})
 }
 
 func (a *App) listItems(w http.ResponseWriter, r *http.Request) {

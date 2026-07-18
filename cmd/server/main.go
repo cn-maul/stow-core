@@ -12,12 +12,30 @@ import (
 	"time"
 
 	"stow-core/internal/app"
+	"stow-core/internal/config"
 	"stow-core/internal/store"
 )
 
+const version = "1.0.2"
+
 func main() {
-	addr := env("STOW_ADDR", "127.0.0.1:8080")
-	dbPath := env("STOW_DB", "data/stow.db")
+	cfgPath := "stow.config.json"
+	if p := os.Getenv("STOW_CONFIG"); p != "" {
+		cfgPath = p
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+
+	if len(cfg.Keys) > 0 {
+		if err := config.ValidateKeys(cfg.Keys); err != nil {
+			log.Fatalf("validate keys: %v", err)
+		}
+	}
+
+	dbPath := cfg.DB
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		log.Fatalf("create data directory: %v", err)
 	}
@@ -29,8 +47,8 @@ func main() {
 	defer db.Close()
 
 	server := &http.Server{
-		Addr:              addr,
-		Handler:           app.New(db).Handler(),
+		Addr:              cfg.Addr,
+		Handler:           app.New(db, version, cfg.Keys).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -38,7 +56,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Stow Core listening on http://%s", addr)
+		log.Printf("Stow Core v%s listening on http://%s", version, cfg.Addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("serve: %v", err)
 		}
@@ -53,11 +71,4 @@ func main() {
 	if err := server.Shutdown(ctx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
-}
-
-func env(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
-	}
-	return fallback
 }

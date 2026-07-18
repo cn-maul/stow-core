@@ -1,22 +1,37 @@
 # Stow Core
 
-Stow Core 是一个最小化的本地物品库存服务，提供物品管理、入库、出库和盘点功能。
+Stow Core 是一个本地物品库存服务，支持分类、位置、批次、到期日期管理。
 
-当前版本有意保持简单：没有 MCP、用户系统、权限、幂等和前端页面。
-
-## 快速开始
+## 启动
 
 ```bash
 go run ./cmd/server
 ```
 
-默认监听 `127.0.0.1:8080`，数据库文件为 `data/stow.db`。
+服务会读取当前目录下的 `stow.config.json`。
 
-可以通过环境变量修改：
+## 配置文件
 
-```text
-STOW_ADDR=127.0.0.1:8080
-STOW_DB=data/stow.db
+```json
+{
+  "addr": "127.0.0.1:8080",
+  "db": "data/stow.db",
+  "keys": ["stow-aB12Cd"]
+}
+```
+
+- `addr`：监听地址，默认 `127.0.0.1:8080`
+- `db`：数据库路径，默认 `data/stow.db`
+- `keys`：认证密钥列表，格式 `stow-xxxxxx`（6 位数字字母），留空则不认证
+
+环境变量 `STOW_CONFIG` 可指定配置文件路径。
+
+## 认证
+
+配置了 `keys` 后，所有请求需携带 `X-Stow-Key` 头：
+
+```bash
+curl -H "X-Stow-Key: stow-aB12Cd" http://127.0.0.1:8080/health
 ```
 
 ## 开发验证
@@ -30,5 +45,3 @@ go build -o stow-core.exe ./cmd/server
 ## 文档
 
 - [API 文档](docs/api.md) — 所有接口的详细说明与示例
-
-完整范围和验收标准见 [`MINIMAL_PLAN.md`](MINIMAL_PLAN.md)。
