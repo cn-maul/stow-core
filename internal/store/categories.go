@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 func (s *Store) CreateCategory(ctx context.Context, name string) (Category, error) {
@@ -64,32 +65,26 @@ func (s *Store) UpdateCategory(ctx context.Context, id int64, name string) (Cate
 		return Category{}, ErrInvalidInput
 	}
 
-	c, err := s.GetCategory(ctx, id)
-	if err != nil {
-		return Category{}, err
-	}
-	if c.Name == name {
-		return c, nil
-	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Category{}, fmt.Errorf("begin update category tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	_, err = tx.ExecContext(ctx, `UPDATE categories SET name = ? WHERE id = ?`, name, id)
+	// Conditionally update to detect concurrent modification
+	result, err := tx.ExecContext(ctx, `UPDATE categories SET name = ? WHERE id = ?`, name, id)
 	if err != nil {
 		if isUniqueConstraint(err) {
 			return Category{}, ErrDuplicate
 		}
 		return Category{}, fmt.Errorf("update category: %w", err)
 	}
-
-	// Cascade to items
-	_, err = tx.ExecContext(ctx, `UPDATE items SET category = ? WHERE category = ?`, name, c.Name)
+	rows, err := result.RowsAffected()
 	if err != nil {
-		return Category{}, fmt.Errorf("cascade category to items: %w", err)
+		return Category{}, fmt.Errorf("check category update: %w", err)
+	}
+	if rows == 0 {
+		return Category{}, ErrNotFound
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -100,25 +95,37 @@ func (s *Store) UpdateCategory(ctx context.Context, id int64, name string) (Cate
 }
 
 func (s *Store) DeleteCategory(ctx context.Context, id int64) error {
-	c, err := s.GetCategory(ctx, id)
+	// Use transaction to be safe; FK RESTRICT is the real guard
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("begin delete category tx: %w", err)
 	}
-	var count int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM items WHERE category = ?`, c.Name).Scan(&count); err != nil {
-		return fmt.Errorf("check items using category: %w", err)
-	}
-	if count > 0 {
-		return ErrInUse
-	}
-	result, err := s.db.ExecContext(ctx, `DELETE FROM categories WHERE id = ?`, id)
+	defer tx.Rollback()
+
+	// Check if item exists
+	var exists int
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM categories WHERE id = ?`, id).Scan(&exists)
 	if err != nil {
+		return fmt.Errorf("check category exists: %w", err)
+	}
+	if exists == 0 {
+		return ErrNotFound
+	}
+
+	result, err := tx.ExecContext(ctx, `DELETE FROM categories WHERE id = ?`, id)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "foreign key") {
+			return ErrInUse
+		}
 		return fmt.Errorf("delete category: %w", err)
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
 		return ErrNotFound
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete category: %w", err)
 	}
 	return nil
 }

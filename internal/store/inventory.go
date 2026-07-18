@@ -5,23 +5,37 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
+// StockIn adds a batch to the item's inventory.
 func (s *Store) StockIn(ctx context.Context, itemID int64, quantity int, note string, expirationDate *string) (Item, error) {
 	if quantity <= 0 {
 		return Item{}, ErrInvalidInput
 	}
-	if expirationDate != nil && *expirationDate == "" {
-		expirationDate = nil
+
+	exp := expirationDate
+	if exp != nil && *exp == "" {
+		exp = nil
+	}
+	if exp != nil {
+		_, err := time.Parse("2006-01-02", *exp)
+		if err != nil {
+			return Item{}, fmt.Errorf("%w: invalid expiration date format (expected YYYY-MM-DD)", ErrInvalidInput)
+		}
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Item{}, fmt.Errorf("begin stock-in transaction: %w", err)
+		return Item{}, fmt.Errorf("begin stock-in tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	item, err := scanItem(tx.QueryRowContext(ctx, `SELECT `+itemColumns+` FROM items WHERE id = ?`, itemID))
+	item, err := scanItemTx(tx.QueryRowContext(ctx, `SELECT `+itemColumnsShort+`
+		FROM items i
+		LEFT JOIN categories c ON i.category_id = c.id
+		LEFT JOIN locations l ON i.location_id = l.id
+		WHERE i.id = ?`, itemID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Item{}, ErrNotFound
 	}
@@ -30,28 +44,28 @@ func (s *Store) StockIn(ctx context.Context, itemID int64, quantity int, note st
 	}
 
 	newQuantity := item.Quantity + quantity
-	timestamp := now()
+	ts := now()
 
-	if _, err := tx.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		UPDATE items SET quantity = ?, updated_at = ? WHERE id = ?`,
-		newQuantity, timestamp, itemID,
-	); err != nil {
+		newQuantity, ts, itemID)
+	if err != nil {
 		return Item{}, fmt.Errorf("update item quantity: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO batches (item_id, quantity, expiration_date, created_at)
 		VALUES (?, ?, ?, ?)`,
-		itemID, quantity, expirationDate, timestamp,
-	); err != nil {
+		itemID, quantity, exp, ts)
+	if err != nil {
 		return Item{}, fmt.Errorf("create batch: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO movements (item_id, type, change, quantity_after, note, created_at)
 		VALUES (?, ?, ?, ?, ?, ?)`,
-		itemID, "stock_in", quantity, newQuantity, note, timestamp,
-	); err != nil {
+		itemID, "stock_in", quantity, newQuantity, note, ts)
+	if err != nil {
 		return Item{}, fmt.Errorf("create movement: %w", err)
 	}
 
@@ -60,10 +74,11 @@ func (s *Store) StockIn(ctx context.Context, itemID int64, quantity int, note st
 	}
 
 	item.Quantity = newQuantity
-	item.UpdatedAt = timestamp
+	item.UpdatedAt = ts
 	return item, nil
 }
 
+// StockOut removes quantity from the item's inventory using FEFO (first-expired-first-out).
 func (s *Store) StockOut(ctx context.Context, itemID int64, quantity int, note string) (Item, error) {
 	if quantity <= 0 {
 		return Item{}, ErrInvalidInput
@@ -71,11 +86,15 @@ func (s *Store) StockOut(ctx context.Context, itemID int64, quantity int, note s
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Item{}, fmt.Errorf("begin stock-out transaction: %w", err)
+		return Item{}, fmt.Errorf("begin stock-out tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	item, err := scanItem(tx.QueryRowContext(ctx, `SELECT `+itemColumns+` FROM items WHERE id = ?`, itemID))
+	item, err := scanItemTx(tx.QueryRowContext(ctx, `SELECT `+itemColumnsShort+`
+		FROM items i
+		LEFT JOIN categories c ON i.category_id = c.id
+		LEFT JOIN locations l ON i.location_id = l.id
+		WHERE i.id = ?`, itemID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Item{}, ErrNotFound
 	}
@@ -88,24 +107,24 @@ func (s *Store) StockOut(ctx context.Context, itemID int64, quantity int, note s
 	}
 
 	newQuantity := item.Quantity - quantity
-	timestamp := now()
+	ts := now()
 
 	if err := consumeFromBatches(tx, itemID, quantity); err != nil {
 		return Item{}, err
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		UPDATE items SET quantity = ?, updated_at = ? WHERE id = ?`,
-		newQuantity, timestamp, itemID,
-	); err != nil {
+		newQuantity, ts, itemID)
+	if err != nil {
 		return Item{}, fmt.Errorf("update item quantity: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO movements (item_id, type, change, quantity_after, note, created_at)
 		VALUES (?, ?, ?, ?, ?, ?)`,
-		itemID, "stock_out", -quantity, newQuantity, note, timestamp,
-	); err != nil {
+		itemID, "stock_out", -quantity, newQuantity, note, ts)
+	if err != nil {
 		return Item{}, fmt.Errorf("create movement: %w", err)
 	}
 
@@ -114,10 +133,11 @@ func (s *Store) StockOut(ctx context.Context, itemID int64, quantity int, note s
 	}
 
 	item.Quantity = newQuantity
-	item.UpdatedAt = timestamp
+	item.UpdatedAt = ts
 	return item, nil
 }
 
+// Adjust sets the item's quantity to the given value.
 func (s *Store) Adjust(ctx context.Context, itemID int64, quantity int, note string) (Item, error) {
 	if quantity < 0 {
 		return Item{}, ErrInvalidInput
@@ -125,11 +145,15 @@ func (s *Store) Adjust(ctx context.Context, itemID int64, quantity int, note str
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Item{}, fmt.Errorf("begin adjust transaction: %w", err)
+		return Item{}, fmt.Errorf("begin adjust tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	item, err := scanItem(tx.QueryRowContext(ctx, `SELECT `+itemColumns+` FROM items WHERE id = ?`, itemID))
+	item, err := scanItemTx(tx.QueryRowContext(ctx, `SELECT `+itemColumnsShort+`
+		FROM items i
+		LEFT JOIN categories c ON i.category_id = c.id
+		LEFT JOIN locations l ON i.location_id = l.id
+		WHERE i.id = ?`, itemID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Item{}, ErrNotFound
 	}
@@ -142,33 +166,35 @@ func (s *Store) Adjust(ctx context.Context, itemID int64, quantity int, note str
 		return item, nil
 	}
 
-	timestamp := now()
+	ts := now()
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM batches WHERE item_id = ?`, itemID); err != nil {
+	_, err = tx.ExecContext(ctx, `DELETE FROM batches WHERE item_id = ?`, itemID)
+	if err != nil {
 		return Item{}, fmt.Errorf("delete batches: %w", err)
 	}
+
 	if quantity > 0 {
-		if _, err := tx.ExecContext(ctx, `
+		_, err = tx.ExecContext(ctx, `
 			INSERT INTO batches (item_id, quantity, expiration_date, created_at)
 			VALUES (?, ?, NULL, ?)`,
-			itemID, quantity, timestamp,
-		); err != nil {
+			itemID, quantity, ts)
+		if err != nil {
 			return Item{}, fmt.Errorf("create batch for adjust: %w", err)
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		UPDATE items SET quantity = ?, updated_at = ? WHERE id = ?`,
-		quantity, timestamp, itemID,
-	); err != nil {
+		quantity, ts, itemID)
+	if err != nil {
 		return Item{}, fmt.Errorf("update item quantity: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO movements (item_id, type, change, quantity_after, note, created_at)
 		VALUES (?, ?, ?, ?, ?, ?)`,
-		itemID, "adjust", change, quantity, note, timestamp,
-	); err != nil {
+		itemID, "adjust", change, quantity, note, ts)
+	if err != nil {
 		return Item{}, fmt.Errorf("create movement: %w", err)
 	}
 
@@ -177,15 +203,22 @@ func (s *Store) Adjust(ctx context.Context, itemID int64, quantity int, note str
 	}
 
 	item.Quantity = quantity
-	item.UpdatedAt = timestamp
+	item.UpdatedAt = ts
 	return item, nil
 }
 
+// consumeFromBatches removes quantity from batches using FEFO ordering.
+// NULL expiration_date batches are consumed last.
 func consumeFromBatches(tx *sql.Tx, itemID int64, quantity int) error {
+	// Sort: batches with expiration_date ASC first, then NULL last, then by created_at, then id
 	rows, err := tx.Query(`
 		SELECT id, quantity FROM batches
 		WHERE item_id = ?
-		ORDER BY expiration_date ASC, created_at ASC`, itemID)
+		ORDER BY
+			CASE WHEN expiration_date IS NULL THEN 1 ELSE 0 END,
+			expiration_date ASC,
+			created_at ASC,
+			id ASC`, itemID)
 	if err != nil {
 		return fmt.Errorf("query batches: %w", err)
 	}
@@ -207,11 +240,13 @@ func consumeFromBatches(tx *sql.Tx, itemID int64, quantity int) error {
 		remaining -= consume
 		newQty := batchQty - consume
 		if newQty == 0 {
-			if _, err := tx.Exec(`DELETE FROM batches WHERE id = ?`, batchID); err != nil {
+			_, err := tx.Exec(`DELETE FROM batches WHERE id = ?`, batchID)
+			if err != nil {
 				return fmt.Errorf("delete empty batch: %w", err)
 			}
 		} else {
-			if _, err := tx.Exec(`UPDATE batches SET quantity = ? WHERE id = ?`, newQty, batchID); err != nil {
+			_, err := tx.Exec(`UPDATE batches SET quantity = ? WHERE id = ?`, newQty, batchID)
+			if err != nil {
 				return fmt.Errorf("update batch quantity: %w", err)
 			}
 		}
@@ -225,13 +260,21 @@ func consumeFromBatches(tx *sql.Tx, itemID int64, quantity int) error {
 	return nil
 }
 
+// ListBatches returns all batches for the given item.
 func (s *Store) ListBatches(ctx context.Context, itemID int64) ([]Batch, error) {
 	if _, err := s.GetItem(ctx, itemID); err != nil {
 		return nil, err
 	}
+	// Use same FEFO ordering as consumption
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, item_id, quantity, expiration_date, created_at
-		FROM batches WHERE item_id = ? ORDER BY expiration_date ASC, created_at ASC`, itemID)
+		FROM batches
+		WHERE item_id = ?
+		ORDER BY
+			CASE WHEN expiration_date IS NULL THEN 1 ELSE 0 END,
+			expiration_date ASC,
+			created_at ASC,
+			id ASC`, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("list batches: %w", err)
 	}
@@ -251,6 +294,7 @@ func (s *Store) ListBatches(ctx context.Context, itemID int64) ([]Batch, error) 
 	return batches, nil
 }
 
+// ListMovements returns all movements for the given item, ordered by id DESC.
 func (s *Store) ListMovements(ctx context.Context, itemID int64) ([]Movement, error) {
 	if _, err := s.GetItem(ctx, itemID); err != nil {
 		return nil, err
@@ -265,19 +309,19 @@ func (s *Store) ListMovements(ctx context.Context, itemID int64) ([]Movement, er
 
 	movements := make([]Movement, 0)
 	for rows.Next() {
-		var movement Movement
+		var m Movement
 		if err := rows.Scan(
-			&movement.ID,
-			&movement.ItemID,
-			&movement.Type,
-			&movement.Change,
-			&movement.QuantityAfter,
-			&movement.Note,
-			&movement.CreatedAt,
+			&m.ID,
+			&m.ItemID,
+			&m.Type,
+			&m.Change,
+			&m.QuantityAfter,
+			&m.Note,
+			&m.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan movement: %w", err)
 		}
-		movements = append(movements, movement)
+		movements = append(movements, m)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate movements: %w", err)

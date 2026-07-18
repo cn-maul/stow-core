@@ -53,10 +53,7 @@ button.danger { background: #ff3b30; }
   <div class="card">
     <h2><span class="method post">POST</span>/api/items</h2>
     <label>名称 *</label><input id="in-createName" value="大米" placeholder="名称">
-    <div class="row2">
-      <div><label>分类</label><input id="in-createCategory" value="食品" placeholder="分类"></div>
-      <div><label>单位 *</label><input id="in-createUnit" value="袋" placeholder="单位"></div>
-    </div>
+    <label>分类</label><input id="in-createCategory" value="食品" placeholder="分类">
     <label>存放位置</label><input id="in-createLocation" value="厨房" placeholder="位置">
     <button onclick="createItem()">创建物品</button>
     <textarea class="response" id="res-createItem" readonly placeholder="响应"></textarea>
@@ -73,10 +70,7 @@ button.danger { background: #ff3b30; }
     <h2><span class="method put">PUT</span>/api/items/{id}</h2>
     <label>物品 ID</label><input id="in-updateId" value="1" placeholder="ID">
     <label>名称 *</label><input id="in-updateName" value="五常大米" placeholder="名称">
-    <div class="row2">
-      <div><label>分类</label><input id="in-updateCategory" value="食品" placeholder="分类"></div>
-      <div><label>单位 *</label><input id="in-updateUnit" value="袋" placeholder="单位"></div>
-    </div>
+    <label>分类</label><input id="in-updateCategory" value="食品" placeholder="分类">
     <label>存放位置</label><input id="in-updateLocation" value="储物间" placeholder="位置">
     <button onclick="updateItem()">更新物品</button>
     <textarea class="response" id="res-updateItem" readonly placeholder="响应"></textarea>
@@ -172,7 +166,6 @@ async function createItem() {
   const body = {
     name: document.getElementById('in-createName').value,
     category: document.getElementById('in-createCategory').value,
-    unit: document.getElementById('in-createUnit').value,
     location: document.getElementById('in-createLocation').value,
   };
   const res = await api('POST', '/api/items', body);
@@ -190,7 +183,6 @@ async function updateItem() {
   const body = {
     name: document.getElementById('in-updateName').value,
     category: document.getElementById('in-updateCategory').value,
-    unit: document.getElementById('in-updateUnit').value,
     location: document.getElementById('in-updateLocation').value,
   };
   const res = await api('PUT', `/api/items/${id}`, body);

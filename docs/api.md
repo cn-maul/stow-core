@@ -8,10 +8,12 @@
 
 ## 认证
 
-配置了密钥后，所有请求需携带 `X-Stow-Key` 头。密钥格式为 `stow-xxxxxx`（6 位数字字母）。
+配置了密钥后，所有请求需携带 `X-Stow-Key` 头，或使用 `Authorization: Bearer ...`。密钥格式为 `stow-xxxxxx`（6 位数字字母）。
 
 ```bash
 curl -H "X-Stow-Key: stow-aB12Cd" http://127.0.0.1:8080/health
+# 也可以使用：
+curl -H "Authorization: Bearer stow-aB12Cd" http://127.0.0.1:8080/health
 ```
 
 未认证时返回 **401**。
@@ -24,8 +26,10 @@ curl -H "X-Stow-Key: stow-aB12Cd" http://127.0.0.1:8080/health
 | --- | --- | --- |
 | `id` | integer | 物品 ID |
 | `name` | string | 物品名称 |
-| `category` | string | 分类名称 |
-| `location` | string | 位置名称 |
+| `category_id` | integer or null | 分类 ID |
+| `category` | string | 分类名称；未设置时为空字符串 |
+| `location_id` | integer or null | 位置 ID |
+| `location` | string | 位置名称；未设置时为空字符串 |
 | `quantity` | integer | 当前库存数量 |
 | `created_at` | string | 创建时间 (RFC3339) |
 | `updated_at` | string | 更新时间 (RFC3339) |
@@ -66,7 +70,7 @@ curl -H "X-Stow-Key: stow-aB12Cd" http://127.0.0.1:8080/health
 | `expiration_date` | string or null | 到期日期（格式 `YYYY-MM-DD`） |
 | `created_at` | string | 创建时间 |
 
-每次入库会创建一个批次。出库时按到期日期 **FIFO**（先到期先出）消耗批次。盘点会清空所有批次并新建一个无到期日期的批次。
+每次入库会创建一个批次。出库时按到期日期 **FEFO**（先到期先出）消耗批次；没有到期日期的批次最后消耗，同一到期日期再按创建时间和 ID 排序。盘点会清空所有批次并新建一个无到期日期的批次。
 
 ## 物品管理
 
@@ -82,7 +86,9 @@ GET /api/items
   {
     "id": 1,
     "name": "大米",
+    "category_id": 1,
     "category": "食品",
+    "location_id": 1,
     "location": "厨房",
     "quantity": 10,
     "created_at": "2026-07-17T12:00:00Z",
@@ -97,14 +103,18 @@ GET /api/items
 POST /api/items
 Content-Type: application/json
 
-{"name":"大米","category":"食品","location":"厨房"}
+{"name":"大米","category_id":1,"location_id":1}
 ```
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `name` | 是 | 物品名称 |
-| `category` | 否 | 分类名称，默认 `""` |
-| `location` | 否 | 位置名称，默认 `""` |
+| `category_id` | 否 | 分类 ID，优先于 `category` |
+| `location_id` | 否 | 位置 ID，优先于 `location` |
+| `category` | 否 | 分类名称；不存在时会自动创建分类 |
+| `location` | 否 | 位置名称；不存在时会自动创建位置 |
+
+`category`/`location` 是兼容字段。新客户端建议先创建分类和位置，再传递 `category_id`/`location_id`。未提供对应字段时物品不关联分类或位置；同时提供 ID 和名称时以 ID 为准。
 
 **响应 201：** 返回创建的物品对象
 
@@ -123,7 +133,7 @@ GET /api/items/{id}
 PUT /api/items/{id}
 Content-Type: application/json
 
-{"name":"大米","category":"食品","location":"厨房"}
+{"name":"大米","category_id":1,"location_id":1}
 ```
 
 参数与创建一致。**响应 200：** 返回修改后的物品对象。
@@ -189,7 +199,7 @@ Content-Type: application/json
 GET /api/items/{id}/batches
 ```
 
-**响应 200：** 返回批次列表，按到期日期升序排列。
+**响应 200：** 返回批次列表，按 FEFO 顺序排列；无到期日期的批次排在最后。
 
 ```json
 [
@@ -330,14 +340,14 @@ GET /api/export
 **响应 200：**
 ```json
 {
-  "version": "1.0.2",
+  "version": 2,
   "categories": [{"id": 1, "name": "食品"}],
   "locations": [{"id": 1, "name": "厨房"}],
   "items": [
     {
       "name": "大米",
-      "category": "食品",
-      "location": "厨房",
+      "category_id": 1,
+      "location_id": 1,
       "batches": [
         {"quantity": 5, "expiration_date": "2027-06-01"}
       ]
@@ -353,14 +363,14 @@ POST /api/import
 Content-Type: application/json
 
 {
-  "version": "1.0.2",
+  "version": 2,
   "categories": [{"name": "食品"}],
   "locations": [{"name": "厨房"}],
   "items": [
     {
       "name": "大米",
-      "category": "食品",
-      "location": "厨房",
+      "category_id": 1,
+      "location_id": 1,
       "batches": [
         {"quantity": 5, "expiration_date": "2027-06-01"}
       ]
@@ -369,7 +379,7 @@ Content-Type: application/json
 }
 ```
 
-`version` 必填。分类和位置按名称去重，物品直接导入，批次按导出时的数据恢复。
+`version` 必须为整数 `2`。分类和位置按名称去重，物品中的 `category_id`/`location_id` 会通过导出数据中的 ID 映射到本地 ID；引用不存在的 ID 或批次数量小于等于 0 时拒绝整个导入。导入在一个事务中执行，失败时不会保留部分数据。
 
 **响应 200：**
 ```json
@@ -395,7 +405,7 @@ GET /health
 | --- | --- |
 | 400 | 请求参数错误 |
 | 404 | 资源不存在 |
-  409 | 冲突（库存不足、仍有库存、重名、被引用等）
+| 409 | 冲突（库存不足、仍有库存、重名、被引用等） |
 | 401 | 未认证或密钥无效 |
 | 500 | 服务端内部错误 |
 

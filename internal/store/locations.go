@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 func (s *Store) CreateLocation(ctx context.Context, name string) (Location, error) {
@@ -64,32 +65,25 @@ func (s *Store) UpdateLocation(ctx context.Context, id int64, name string) (Loca
 		return Location{}, ErrInvalidInput
 	}
 
-	l, err := s.GetLocation(ctx, id)
-	if err != nil {
-		return Location{}, err
-	}
-	if l.Name == name {
-		return l, nil
-	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Location{}, fmt.Errorf("begin update location tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	_, err = tx.ExecContext(ctx, `UPDATE locations SET name = ? WHERE id = ?`, name, id)
+	result, err := tx.ExecContext(ctx, `UPDATE locations SET name = ? WHERE id = ?`, name, id)
 	if err != nil {
 		if isUniqueConstraint(err) {
 			return Location{}, ErrDuplicate
 		}
 		return Location{}, fmt.Errorf("update location: %w", err)
 	}
-
-	// Cascade to items
-	_, err = tx.ExecContext(ctx, `UPDATE items SET location = ? WHERE location = ?`, name, l.Name)
+	rows, err := result.RowsAffected()
 	if err != nil {
-		return Location{}, fmt.Errorf("cascade location to items: %w", err)
+		return Location{}, fmt.Errorf("check location update: %w", err)
+	}
+	if rows == 0 {
+		return Location{}, ErrNotFound
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -100,25 +94,35 @@ func (s *Store) UpdateLocation(ctx context.Context, id int64, name string) (Loca
 }
 
 func (s *Store) DeleteLocation(ctx context.Context, id int64) error {
-	l, err := s.GetLocation(ctx, id)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("begin delete location tx: %w", err)
 	}
-	var count int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM items WHERE location = ?`, l.Name).Scan(&count); err != nil {
-		return fmt.Errorf("check items using location: %w", err)
-	}
-	if count > 0 {
-		return ErrInUse
-	}
-	result, err := s.db.ExecContext(ctx, `DELETE FROM locations WHERE id = ?`, id)
+	defer tx.Rollback()
+
+	var exists int
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM locations WHERE id = ?`, id).Scan(&exists)
 	if err != nil {
+		return fmt.Errorf("check location exists: %w", err)
+	}
+	if exists == 0 {
+		return ErrNotFound
+	}
+
+	result, err := tx.ExecContext(ctx, `DELETE FROM locations WHERE id = ?`, id)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "foreign key") {
+			return ErrInUse
+		}
 		return fmt.Errorf("delete location: %w", err)
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
 		return ErrNotFound
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete location: %w", err)
 	}
 	return nil
 }

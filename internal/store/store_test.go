@@ -300,3 +300,81 @@ func TestLocationRenameCascadesToItems(t *testing.T) {
 		t.Fatalf("DeleteLocation() error = %v, want ErrInUse", err)
 	}
 }
+
+func TestExportImportPreservesForeignKeyReferences(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+
+	category, err := s.CreateCategory(ctx, "Food")
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, err := s.CreateLocation(ctx, "Kitchen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := s.CreateItem(ctx, ItemInput{
+		Name:       "Rice",
+		CategoryID: &category.ID,
+		LocationID: &location.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.StockIn(ctx, item.ID, 4, "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := s.Export(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.Version != ExportSchemaVersion {
+		t.Fatalf("export version = %d, want %d", data.Version, ExportSchemaVersion)
+	}
+	if len(data.Items) != 1 || data.Items[0].CategoryID == nil || data.Items[0].LocationID == nil {
+		t.Fatalf("exported references = %+v, want category and location IDs", data.Items)
+	}
+
+	other := testStore(t)
+	if err := other.Import(ctx, *data); err != nil {
+		t.Fatal(err)
+	}
+	items, err := other.ListItems(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Category != "Food" || items[0].Location != "Kitchen" || items[0].Quantity != 4 {
+		t.Fatalf("imported item = %+v, want preserved references and quantity", items)
+	}
+}
+
+func TestImportRejectsUnknownReferencesAndInvalidBatchQuantity(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	categoryID := int64(99)
+
+	err := s.Import(ctx, ExportData{
+		Version: ExportSchemaVersion,
+		Items: []ExportItem{{
+			Name:       "Rice",
+			CategoryID: &categoryID,
+		}},
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("unknown category error = %v, want ErrInvalidInput", err)
+	}
+
+	err = s.Import(ctx, ExportData{
+		Version: ExportSchemaVersion,
+		Items: []ExportItem{{
+			Name: "Rice",
+			Batches: []ExportBatch{{
+				Quantity: 0,
+			}},
+		}},
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("invalid batch quantity error = %v, want ErrInvalidInput", err)
+	}
+}

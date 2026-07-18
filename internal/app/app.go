@@ -31,7 +31,7 @@ type stockInput struct {
 }
 
 func New(s *store.Store, version string, keys []string) *App {
-	gin.SetMode(gin.ReleaseMode)
+	gin.SetMode(gin.DebugMode)
 	a := &App{
 		store:      s,
 		engine:     gin.New(),
@@ -106,6 +106,12 @@ func authMiddleware(keys []string) gin.HandlerFunc {
 		}
 		key := c.GetHeader("X-Stow-Key")
 		if key == "" {
+			auth := c.GetHeader("Authorization")
+			if strings.HasPrefix(auth, "Bearer ") {
+				key = strings.TrimPrefix(auth, "Bearer ")
+			}
+		}
+		if key == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing X-Stow-Key header"})
 			return
 		}
@@ -151,7 +157,7 @@ func (a *App) importData(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "request body must contain one JSON object"})
 		return
 	}
-	if data.Version == "" {
+	if data.Version == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing version field"})
 		return
 	}
@@ -485,6 +491,9 @@ func handleError(c *gin.Context, err error) {
 	// Added by user later
 	case errors.Is(err, store.ErrDuplicate):
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	// Added by user later
+	case errors.Is(err, store.ErrExportError):
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	// Added by user later
 	default:
 		log.Printf("request failed: %v", err)

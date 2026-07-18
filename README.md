@@ -1,16 +1,31 @@
 # Stow Core
 
-Stow Core 是一个本地物品库存服务，支持分类、位置、批次、到期日期管理。
+Stow Core 是一个本地物品库存服务，面向家庭、工作室和小型场景，使用 Go 和 SQLite 提供轻量级 REST API。
 
-## 启动
+项目支持物品、分类、存放位置、库存批次、到期日期和库存流水管理，并提供数据导入导出、API 密钥认证和一个简单的浏览器调试页面。
+
+## 快速开始
 
 ```bash
 go run ./cmd/server
 ```
 
-服务会读取当前目录下的 `stow.config.json`。
+服务默认读取当前目录下的 `stow.config.json`，数据库默认创建在 `data/stow.db`。
 
-## 配置文件
+也可以通过环境变量指定配置文件：
+
+```bash
+STOW_CONFIG=/path/to/stow.config.json go run ./cmd/server
+```
+
+Windows PowerShell：
+
+```powershell
+$env:STOW_CONFIG = "C:\path\to\stow.config.json"
+go run ./cmd/server
+```
+
+## 配置示例
 
 ```json
 {
@@ -20,28 +35,16 @@ go run ./cmd/server
 }
 ```
 
-- `addr`：监听地址，默认 `0.0.0.0:8080`（局域网/外部可访问）
-- `db`：数据库路径，默认 `data/stow.db`
-- `keys`：认证密钥列表，格式 `stow-xxxxxx`（6 位数字字母），留空则不认证
+配置 `keys` 后，请求需要携带 `X-Stow-Key` 或 `Authorization: Bearer` 认证头；留空则不启用认证。
 
-环境变量 `STOW_CONFIG` 可指定配置文件路径。
-
-## 认证
-
-配置了 `keys` 后，所有请求需携带 `X-Stow-Key` 头：
-
-```bash
-curl -H "X-Stow-Key: stow-aB12Cd" http://127.0.0.1:8080/health
-```
-
-## 开发验证
+## 项目验证
 
 ```bash
 go test ./...
 go vet ./...
-go build -o stow-core.exe ./cmd/server
+go build ./cmd/server
 ```
 
 ## 文档
 
-- [API 文档](docs/api.md) — 所有接口的详细说明与示例
+- [API 文档](docs/api.md)：接口、数据模型、认证、库存规则、导入导出格式和错误响应的完整说明

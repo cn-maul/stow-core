@@ -23,7 +23,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-		if cfg.Addr == "" {
+	if cfg.Addr == "" {
 		cfg.Addr = "0.0.0.0:8080"
 	}
 	if cfg.DB == "" {
@@ -34,7 +34,16 @@ func Load(path string) (*Config, error) {
 }
 
 func IsValidKey(key string) bool {
-	return len(key) == 11 && key[:5] == "stow-"
+	if len(key) != 11 || key[:5] != "stow-" {
+		return false
+	}
+	for i := 5; i < 11; i++ {
+		c := key[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+			return false
+		}
+	}
+	return true
 }
 
 func ValidateKeys(keys []string) error {
