@@ -1,6 +1,7 @@
 # Build output
 stow-core
-stow-core.exe
+stow-core.exe~
+stow-core.exe~
 *.exe
 *.test
 *.out

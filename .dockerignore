@@ -1,0 +1,6 @@
+.git
+*.exe
+*.db
+data/
+public/
+stow.config.json
